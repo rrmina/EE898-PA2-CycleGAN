@@ -1,0 +1,14 @@
+.idea
+__pycache__
+datasets/horse2zebra
+datasets/maps
+datasets/ae_photos
+datasets/apple2orange
+datasets/summer2winter_Yosemite
+datasets/monet2photo
+datasets/cezanne2photo
+datasets/ukiyoe2photo
+datasets/vangogh2photo
+datasets/cityscapes
+datasets/facades
+datasets/monet2photoiphone2dslr_flower

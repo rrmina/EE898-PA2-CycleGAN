@@ -428,16 +428,17 @@ class AttentionGenerator(nn.Module):
             ResidualLayer(c*4, 3, 1, use_dropout, norm_layer, padding_type),
             ResidualLayer(c*4, 3, 1, use_dropout, norm_layer, padding_type)
         )
+        # self.pool = nn.MaxPool2d(2,2)
+        self.AttentionBlock = nn.Sequential(
+            Self_Attn(c*4, None),
+            nn.ReLU(),
+        )
         self.UpsampleBlock = nn.Sequential(
             SAGAN_DeconvLayer(c*4, c*2, 3, 2, norm_layer, 1, padding_type),
             nn.ReLU(True),
-            Self_Attn(c*2, None),
-            nn.ReLU(),
             SAGAN_DeconvLayer(c*2, c*1, 3, 2, norm_layer, 1, padding_type),
             nn.ReLU(True),
-            Self_Attn(c*1, None),
-            nn.ReLU(),
-            SAGAN_ConvLayer(c*1,   3, 7, 1, None, padding_type),
+            SAGAN_ConvLayer(c,   3, 7, 1, None, padding_type),
             nn.Tanh()
         )
 
@@ -446,9 +447,9 @@ class AttentionGenerator(nn.Module):
         ## Your Implementation Here ##
         x = self.ConvBlock(input)
         x = self.ResidualBlock(x)
+        x = self.AttentionBlock(x)
         x = self.UpsampleBlock(x)
         return x
-
 
 class Self_Attn(nn.Module):
     """ Self attention Layer"""
@@ -480,6 +481,8 @@ class Self_Attn(nn.Module):
         # where gamma is a learnable scalar and it is initialized as 0
         self.gamma = nn.Parameter(torch.zeros(1))
 
+        self.softmax = nn.Softmax(dim=-1)
+
     def forward(self, x):
         ## Your Implementation Here ##
         B,C,H,W = x.shape
@@ -493,7 +496,7 @@ class Self_Attn(nn.Module):
 
         # Attention Proper
         energy = torch.bmm(query, key)                              # [B, H*W, H*W]     In the paper, this is sij
-        attention = torch.softmax(energy, dim=-1)                   # [B, H*W, H*W]     in the paperm this is Beta j,i
+        attention = self.softmax(energy)                            # [B, H*W, H*W]     in the paperm this is Beta j,i
 
         # Value - Feature space H
         value = self.value_conv(x).view(B, -1, H*W)                 # [B, C, H*W]
@@ -510,7 +513,6 @@ class Self_Attn(nn.Module):
         # Also, in order to be compatible with the API of nn.Sequential(), attention values are not returned
 
         return out
-
 
 class BaselineDiscriminator(nn.Module):
 
@@ -576,8 +578,6 @@ class AttentionDiscriminator(nn.Module):
         layers = [
             ConvLayer(3, c, 4, 2, None, padding_type='zero'),
             nn.LeakyReLU(0.2, True),
-            Self_Attn(c, None),
-            nn.LeakyReLU(0.2, True)
         ]
 
         # Conv Layers With norm
@@ -585,12 +585,17 @@ class AttentionDiscriminator(nn.Module):
             layers += [
                 ConvLayer(c, c*2, 4, 2, norm_layer, padding_type='zero'),
                 nn.LeakyReLU(0.2, True),
-                Self_Attn(c*2, None),
-                nn.LeakyReLU(0.2, True)
             ]
 
             # Twice channel
             c *= 2
+
+        # Attention Layer just before the Output Layer
+        layers += [
+            Self_Attn(c, None),
+            nn.LeakyReLU(0.2, True)
+        ]
+                
 
         # Output layer
         layers += [

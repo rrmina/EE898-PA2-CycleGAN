@@ -406,12 +406,48 @@ class AttentionGenerator(nn.Module):
         super(AttentionGenerator, self).__init__()
         ## Your Implementation Here ##
 
+        # Define Activation and Dropout
+        activation_dropout = [nn.ReLU(True)]
+        if (use_dropout):
+            activation_dropout += [nn.Dropout(0.5)]
+        
+        c = ngf
+        self.ConvBlock = nn.Sequential(
+            SAGAN_ConvLayer(  3,   c, 7, 1, norm_layer, padding_type),
+            nn.ReLU(True),
+            SAGAN_ConvLayer(  c, c*2, 3, 2, norm_layer, padding_type),
+            nn.ReLU(True),
+            SAGAN_ConvLayer(c*2, c*4, 3, 2, norm_layer, padding_type),
+            nn.ReLU(True)
+        )
+        self.ResidualBlock = nn.Sequential(
+            ResidualLayer(c*4, 3, 1, use_dropout, norm_layer, padding_type),
+            ResidualLayer(c*4, 3, 1, use_dropout, norm_layer, padding_type),
+            ResidualLayer(c*4, 3, 1, use_dropout, norm_layer, padding_type),
+            ResidualLayer(c*4, 3, 1, use_dropout, norm_layer, padding_type),
+            ResidualLayer(c*4, 3, 1, use_dropout, norm_layer, padding_type),
+            ResidualLayer(c*4, 3, 1, use_dropout, norm_layer, padding_type)
+        )
+        self.UpsampleBlock = nn.Sequential(
+            SAGAN_DeconvLayer(c*4, c*2, 3, 2, norm_layer, 1, padding_type),
+            nn.ReLU(True),
+            Self_Attn(c*2, None),
+            nn.ReLU(),
+            SAGAN_DeconvLayer(c*2, c*1, 3, 2, norm_layer, 1, padding_type),
+            nn.ReLU(True),
+            Self_Attn(c*1, None),
+            nn.ReLU(),
+            SAGAN_ConvLayer(c*1,   3, 7, 1, None, padding_type),
+            nn.Tanh()
+        )
 
     def forward(self, input):
         """Standard forward"""
         ## Your Implementation Here ##
-
-        return None
+        x = self.ConvBlock(input)
+        x = self.ResidualBlock(x)
+        x = self.UpsampleBlock(x)
+        return x
 
 
 class Self_Attn(nn.Module):
@@ -424,11 +460,56 @@ class Self_Attn(nn.Module):
         """
         super(Self_Attn, self).__init__()
         ## Your Implementation Here ##
+        
+        # Activation is not used because I can not find any reference using activation within self activation modules
+        # As far as I know, activation is not necessarily used in Self Attention
+        # However, since this is a CV class, in effort activation layer is defined outside instead for readability
+
+        # Reference text SAGAN
+        # Page 3 of the reference text "For memory efficiency, we choose k = 8 (i.e., C¯ = C/8) in all our experiments"
+        in_channels = in_dim
+        out_channels = in_channels // 8
+
+        # Convolution Layers for feature mapping
+        self.query_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels, in_channels, kernel_size= 1)
+
+        # Affine/scale parameter gamma
+        # multiply the output of the attention layer by a scale parameter and add back the input feature map
+        # where gamma is a learnable scalar and it is initialized as 0
+        self.gamma = nn.Parameter(torch.zeros(1))
 
     def forward(self, x):
         ## Your Implementation Here ##
+        B,C,H,W = x.shape
 
-        return None
+        # Query - Feature space F
+        query = self.query_conv(x).view(B, -1, H*W).permute(0,2,1)  # [B, H*W, C//8]   - we permute because we take its transpose
+                                                                    #                   later, we will do a batch matrix multiplication Q.T * K                 
+
+        # Key - Feature space G
+        key = self.key_conv(x).view(B, -1, H*W)                     # [B, C//8, H*W]
+
+        # Attention Proper
+        energy = torch.bmm(query, key)                              # [B, H*W, H*W]     In the paper, this is sij
+        attention = torch.softmax(energy, dim=-1)                   # [B, H*W, H*W]     in the paperm this is Beta j,i
+
+        # Value - Feature space H
+        value = self.value_conv(x).view(B, -1, H*W)                 # [B, C, H*W]
+
+        out = torch.bmm(value, attention.permute(0,2,1))            # [B, C, H*W] * [B, H*W, H*W] 
+                                                                    # Permutation is needed even with the same because of the arrangement of the tensors
+                                                                    # Tranposing the attention values is convient when reshaping the output to [B,C,H,W]
+
+        out = out.view(B,C,H,W)
+
+        # Apply the affine parameter gamma and Residual as defined in equation 3 of the reference text
+        out = self.gamma * out + x
+
+        # Also, in order to be compatible with the API of nn.Sequential(), attention values are not returned
+
+        return out
 
 
 class BaselineDiscriminator(nn.Module):
@@ -489,12 +570,40 @@ class AttentionDiscriminator(nn.Module):
         """
         super(AttentionDiscriminator, self).__init__()
         ## Your Implementation Here ##
+        c = ndf
+
+        # Conv layers First layer, no norm
+        layers = [
+            ConvLayer(3, c, 4, 2, None, padding_type='zero'),
+            nn.LeakyReLU(0.2, True),
+            Self_Attn(c, None),
+            nn.LeakyReLU(0.2, True)
+        ]
+
+        # Conv Layers With norm
+        for i in range(n_layers):
+            layers += [
+                ConvLayer(c, c*2, 4, 2, norm_layer, padding_type='zero'),
+                nn.LeakyReLU(0.2, True),
+                Self_Attn(c*2, None),
+                nn.LeakyReLU(0.2, True)
+            ]
+
+            # Twice channel
+            c *= 2
+
+        # Output layer
+        layers += [
+            ConvLayer(c, 1, 4, 1, None, padding_type='zero')
+        ]
+
+        self.model = nn.Sequential(*layers)
+
 
     def forward(self, input):
-        """Standard forward"""
+        """Standard forward."""
         ## Your Implementation Here ##
-
-        return None
+        return self.model(input)
 
 class ConvLayer(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, norm_layer, padding_type="reflect"):
@@ -540,6 +649,51 @@ class ConvLayer(nn.Module):
 
         return x
 
+# The only difference between regular ConvLayer, and SAGAN_ConvLayer is a spectral norm after the Convolution Layer
+class SAGAN_ConvLayer(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, norm_layer, padding_type="reflect"):
+        super(SAGAN_ConvLayer, self).__init__()
+
+        # Padding Layers
+        self.padding_layer = None
+        padding_size = kernel_size // 2
+        if (padding_type == "reflect"):
+            self.padding_layer = nn.ReflectionPad2d(padding_size)
+        elif (padding_type == "replicate"):
+            self.padding_layer = nn.ReplicationPad2d(padding_size)
+        elif (padding_type == "zero"):
+            self.padding_layer = nn.ZeroPad2d(padding_size)
+
+        # Do not use weight bias when using norm layers
+        use_bias = False
+        if (norm_layer == None):
+            use_bias = True
+
+        # Convolution layer
+        if (self.padding_layer == None):
+            self.conv_layer = nn.utils.spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding=padding_size, bias=use_bias))
+        else:
+            self.conv_layer = nn.utils.spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size, stride, bias=use_bias))
+
+        # Normalization Layer
+        self.norm_layer = None
+        if (norm_layer != None):
+            self.norm_layer = norm_layer(out_channels)
+
+    def forward(self, x):
+        # Padding 
+        if (self.padding_layer != None):
+            x = self.padding_layer(x)
+
+        # Conv layer
+        x = self.conv_layer(x)
+
+        # Norm Layer
+        if (self.norm_layer != None):
+            x = self.norm_layer(x)        
+
+        return x
+
 class ResidualLayer(nn.Module):
     def __init__(self, channels=256, kernel_size=3, stride=1, use_dropout=False, norm_layer=nn.InstanceNorm2d, padding_type='reflect'):
         super(ResidualLayer, self).__init__()
@@ -571,6 +725,33 @@ class DeconvLayer(nn.Module):
         # Transposed Convolution
         padding_size = kernel_size // 2
         self.conv_transpose = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding_size, output_padding, bias=use_bias)
+
+        # Normalization Layer
+        self.norm_layer = None
+        if (norm_layer != None):
+            self.norm_layer = norm_layer(out_channels)
+
+    def forward(self, x):
+        x = self.conv_transpose(x)
+
+        if (self.norm_layer != None):
+            x = self.norm_layer(x)
+
+        return x
+
+# The only difference between regular DeconvLayer, and SAGAN_DeconvLayer is a spectral norm after the Transposed Convolution Layer
+class SAGAN_DeconvLayer(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, norm_layer, output_padding, padding_type):
+        super(SAGAN_DeconvLayer, self).__init__()
+
+        # Do not use weight bias when using norm layers
+        use_bias = False
+        if (norm_layer == None):
+            use_bias = True
+
+        # Transposed Convolution
+        padding_size = kernel_size // 2
+        self.conv_transpose = nn.utils.spectral_norm(nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding_size, output_padding, bias=use_bias))
 
         # Normalization Layer
         self.norm_layer = None

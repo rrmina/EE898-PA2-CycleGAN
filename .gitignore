@@ -12,3 +12,5 @@ datasets/vangogh2photo
 datasets/cityscapes
 datasets/facades
 datasets/monet2photoiphone2dslr_flower
+checkpoints/
+*.ipynb

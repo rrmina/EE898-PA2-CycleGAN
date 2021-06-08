@@ -27,7 +27,7 @@ networkx==2.4
 numpy==1.18.4
 olefile==0.46
 openapi-spec-validator==0.2.8
-Pillow==7.1.2
+Pillow==8.2.0
 pycparser==2.20
 pyparsing==2.4.7
 pyrsistent==0.16.0
